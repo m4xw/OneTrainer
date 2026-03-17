@@ -1063,8 +1063,7 @@ class GenericTrainer(BaseTrainer):
                     # Run parent/prior model if needed for either prior prediction or distillation
                     if len(prior_pred_indices) > 0 or len(distillation_indices) > 0 \
                             or (self.config.masked_training
-                                and self.config.masked_prior_preservation_weight > 0
-                                and self.config.training_method == TrainingMethod.LORA):
+                                and self.config.masked_prior_preservation_weight > 0):
                         with self.model_setup.distillation_parent_model(
                             self.model, 
                             self.config, 

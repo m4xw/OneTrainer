@@ -204,6 +204,11 @@ class BaseModelSetup(
         """
         if parent_wrapper is None or not config.distillation.enabled:
             # Fallback to prior_model behavior
+            if config.training_method is not TrainingMethod.LORA:
+                model.to(self.train_device)
+                yield model
+                return
+            
             with self.prior_model(model, config):
                 yield model
             return
@@ -229,7 +234,6 @@ class BaseModelSetup(
             # Move parent back to temp_device (CPU)
             if config.distillation.keep_parent_on_cpu:
                 parent_wrapper.to_device(self.temp_device)
-                torch_gc()
                 
                 # Move student model back to train_device
                 if student_was_moved:
