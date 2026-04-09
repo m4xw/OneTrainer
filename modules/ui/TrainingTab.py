@@ -744,7 +744,7 @@ class TrainingTab:
         # Parent Model Path
         components.label(frame, 1, 0, "Parent Model Path",
                          tooltip="Path to the parent model checkpoint to learn from. The parent model should be trained or a base model that produces better outputs than your student model.")
-        components.file_entry(frame, 1, 1, self.ui_state, "distillation.parent_model_path")
+        components.path_entry(frame, 1, 1, self.ui_state, "distillation.parent_model_path")
 
         # Parent Model Type
         # Filter only Stable Diffusion family models
