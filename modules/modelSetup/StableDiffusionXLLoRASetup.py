@@ -77,8 +77,8 @@ class StableDiffusionXLLoRASetup(
             model: StableDiffusionXLModel,
             config: TrainConfig,
     ):
-        create_te1 = config.text_encoder.train
-        create_te2 = config.text_encoder_2.train
+        create_te1 = config.text_encoder.train or state_dict_has_prefix(model.lora_state_dict, "lora_te1")
+        create_te2 = config.text_encoder_2.train or state_dict_has_prefix(model.lora_state_dict, "lora_te2")
 
         model.text_encoder_1_lora = LoRAModuleWrapper(
             model.text_encoder_1, "lora_te1", config

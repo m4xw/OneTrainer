@@ -905,13 +905,14 @@ class GenericTrainer(BaseTrainer):
                         print(f"[Cache Generation] Batch concept types: {concept_types}")
                         print(f"[Cache Generation] Distillation samples found: {len(distillation_indices)}")
                         
-                        # Move student model to CPU to free VRAM for parent model
-                        self.model.to('cpu')
-                        torch_gc()
-                        
                         if len(distillation_indices) == 0:
                             print(f"[Cache Generation] WARNING: No DISTILLATION concept_type samples found!")
                             print(f"[Cache Generation] Please mark your training samples with 'concept_type': 'DISTILLATION'")
+                    
+                    if (self.config.distillation.enabled and 
+                        self.config.distillation.cache_mode == DistillationCacheMode.GENERATE_CACHE and multi.is_master()):
+                        self.model.to('cpu')
+                        torch_gc()
                     
                     # === CACHE GENERATION MODE ===
                     if (self.config.distillation.enabled and 
@@ -1055,56 +1056,56 @@ class GenericTrainer(BaseTrainer):
                             if multi.is_master() and train_progress.global_step % 10 == 0:
                                 cache_stats = self.distillation_cache_manager.get_cache_stats()
                                 print(f"Cache stats - Hits: {cache_stats['cache_hits']}, Misses: {cache_stats['cache_misses']}")
-                    
-                    # === NORMAL MODE (DISABLED or live inference) ===
-                    # Ensure student model is on training device (may have been moved to CPU during cache generation)
-                    self.model_setup.setup_train_device(self.model, self.config)
-                    
-                    # Run parent/prior model if needed for either prior prediction or distillation
-                    if len(prior_pred_indices) > 0 or len(distillation_indices) > 0 \
-                            or (self.config.masked_training
-                                and self.config.masked_prior_preservation_weight > 0):
-                        with self.model_setup.distillation_parent_model(
-                            self.model, 
-                            self.config, 
-                            self.parent_model_wrapper
-                        ) as parent_model, torch.no_grad():
-                            # Do NOT create a subbatch using the indices, even though it would be more efficient:
-                            # Different timesteps are used for a smaller subbatch by predict(), but the conditioning must match exactly
-                            parent_model_output_data = self.model_setup.predict(
-                                parent_model if parent_model != self.model else self.model,
-                                batch, 
-                                self.config, 
-                                train_progress,
-                                generate_distillation_empty=self.config.distillation.target_mode == DistillationTargetMode.CFG_DISTILL,
-                            )
-                        
-                        # Run student model
-                        model_output_data = self.model_setup.predict(self.model, batch, self.config, train_progress)
-                        
-                        # Get parent predictions
-                        prior_model_prediction = parent_model_output_data['predicted'].to(dtype=model_output_data['target'].dtype)
-
-                        # Apply distillation target transformation before loss routing.
-                        transformed_parent_prediction = self.__build_distillation_target(
-                            batch=batch,
-                            train_progress=train_progress,
-                            parent_model=parent_model if parent_model != self.model else self.model,
-                            parent_model_output_data=parent_model_output_data,
-                        )
-                        
-                        # For prior_prediction: Replace target (legacy behavior)
-                        if len(prior_pred_indices) > 0:
-                            model_output_data['target'][prior_pred_indices] = prior_model_prediction[prior_pred_indices]
-                        
-                        # Store parent prediction for masked prior preservation and distillation
-                        model_output_data['prior_target'] = transformed_parent_prediction
-                        
-                        # For distillation: Store indices for loss calculation
-                        if len(distillation_indices) > 0:
-                            model_output_data['distillation_indices'] = distillation_indices
                     else:
-                        model_output_data = self.model_setup.predict(self.model, batch, self.config, train_progress)
+                        # === NORMAL MODE (DISABLED or live inference) ===
+                        # Ensure student model is on training device (may have been moved to CPU during cache generation)
+                        self.model_setup.setup_train_device(self.model, self.config)
+                        
+                        # Run parent/prior model if needed for either prior prediction or distillation
+                        if len(prior_pred_indices) > 0 or len(distillation_indices) > 0 \
+                                or (self.config.masked_training
+                                    and self.config.masked_prior_preservation_weight > 0):
+                            with self.model_setup.distillation_parent_model(
+                                self.model, 
+                                self.config, 
+                                self.parent_model_wrapper
+                            ) as parent_model, torch.no_grad():
+                                # Do NOT create a subbatch using the indices, even though it would be more efficient:
+                                # Different timesteps are used for a smaller subbatch by predict(), but the conditioning must match exactly
+                                parent_model_output_data = self.model_setup.predict(
+                                    parent_model if parent_model != self.model else self.model,
+                                    batch, 
+                                    self.config, 
+                                    train_progress,
+                                    generate_distillation_empty=self.config.distillation.target_mode == DistillationTargetMode.CFG_DISTILL,
+                                )
+                            
+                            # Run student model
+                            model_output_data = self.model_setup.predict(self.model, batch, self.config, train_progress)
+                            
+                            # Get parent predictions
+                            prior_model_prediction = parent_model_output_data['predicted'].to(dtype=model_output_data['target'].dtype)
+
+                            # Apply distillation target transformation before loss routing.
+                            transformed_parent_prediction = self.__build_distillation_target(
+                                batch=batch,
+                                train_progress=train_progress,
+                                parent_model=parent_model if parent_model != self.model else self.model,
+                                parent_model_output_data=parent_model_output_data,
+                            )
+                            
+                            # For prior_prediction: Replace target (legacy behavior)
+                            if len(prior_pred_indices) > 0:
+                                model_output_data['target'][prior_pred_indices] = prior_model_prediction[prior_pred_indices]
+                            
+                            # Store parent prediction for masked prior preservation and distillation
+                            model_output_data['prior_target'] = transformed_parent_prediction
+                            
+                            # For distillation: Store indices for loss calculation
+                            if len(distillation_indices) > 0:
+                                model_output_data['distillation_indices'] = distillation_indices
+                        else:
+                            model_output_data = self.model_setup.predict(self.model, batch, self.config, train_progress)
 
                     loss = self.model_setup.calculate_loss(self.model, batch, model_output_data, self.config)
 

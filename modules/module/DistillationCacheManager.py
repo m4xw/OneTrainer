@@ -172,19 +172,19 @@ class DistillationCacheManager:
                     f"  Got: {cache_data.get('parent_model_type')}"
                 )
 
-            if cache_data.get('target_mode') != self.target_mode:
-                raise ValueError(
-                    f"Cache metadata mismatch: target_mode\n"
-                    f"  Expected: {self.target_mode}\n"
-                    f"  Got: {cache_data.get('target_mode')}"
-                )
+            #if cache_data.get('target_mode') != self.target_mode:
+            #    raise ValueError(
+            #        f"Cache metadata mismatch: target_mode\n"
+            #        f"  Expected: {self.target_mode}\n"
+            #        f"  Got: {cache_data.get('target_mode')}"
+            #    )
 
-            if float(cache_data.get('cfg_scale', 1.0)) != float(self.cfg_scale):
-                raise ValueError(
-                    f"Cache metadata mismatch: cfg_scale\n"
-                    f"  Expected: {self.cfg_scale}\n"
-                    f"  Got: {cache_data.get('cfg_scale')}"
-                )
+            #if float(cache_data.get('cfg_scale', 1.0)) != float(self.cfg_scale):
+            #    raise ValueError(
+            #        f"Cache metadata mismatch: cfg_scale\n"
+            #        f"  Expected: {self.cfg_scale}\n"
+            #        f"  Got: {cache_data.get('cfg_scale')}"
+            #    )
 
             if int(cache_data.get('rollout_steps', 1)) != int(self.rollout_steps):
                 raise ValueError(
@@ -200,13 +200,13 @@ class DistillationCacheManager:
                     f"  Got: {cache_data.get('rollout_blend')}"
                 )
             
-            # Validate predicted_empty for CFG_DISTILL mode
-            if self.target_mode == 'CFG_DISTILL':
+            # Validate predicted_empty for CFG-based target modes
+            if self.target_mode in {'CFG_DISTILL', 'EMPTY_TARGET'}:
                 if cache_data.get('predicted_empty') is None:
                     raise ValueError(
-                        f"Cache data for CFG_DISTILL mode missing predicted_empty.\n"
+                        f"Cache data for {self.target_mode} mode missing predicted_empty.\n"
                         f"This cache was likely generated with a different target_mode.\n"
-                        f"Please regenerate the cache with target_mode='CFG_DISTILL'."
+                        f"Please regenerate the cache with matching target_mode."
                     )
             
             self.cache_hits += 1

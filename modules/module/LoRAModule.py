@@ -718,6 +718,55 @@ class LoRAModuleWrapper:
             if (checkpoint_rank := state_dict[rank_key].shape[0]) != self.rank:
                 raise ValueError(f"Rank mismatch: checkpoint={checkpoint_rank}, config={self.rank}, please correct in the UI.")
 
+    def _expects_dora_modules(self) -> bool:
+        return self.peft_type == PeftType.LORA and self.klass == DoRAModule
+
+    def _state_dict_has_dora(self, state_dict: dict[str, Tensor]) -> bool:
+        return any(k.endswith(".dora_scale") for k in state_dict)
+
+    def _check_module_type_compatibility(self, state_dict: dict[str, Tensor]):
+        if not state_dict or self.peft_type != PeftType.LORA:
+            return
+
+        expects_dora = self._expects_dora_modules()
+        has_dora_keys = self._state_dict_has_dora(state_dict)
+
+        if has_dora_keys and not expects_dora:
+            raise ValueError(
+                "LoRA/DoRA mismatch: checkpoint contains DoRA keys (*.dora_scale), "
+                "but current config is LoRA (lora_decompose is disabled)."
+            )
+
+    def _fill_missing_dora_scale(self, state_dict: dict[str, Tensor]) -> int:
+        if not self._expects_dora_modules():
+            return 0
+
+        # Allow loading standard LoRA checkpoints into DoRA modules by seeding
+        # missing dora_scale values from the initialized target modules.
+        filled_count = 0
+        for module in self.lora_modules.values():
+            if not isinstance(module, DoRAModule):
+                continue
+
+            module_prefix = module.prefix
+            has_lora_weights = any(
+                key.startswith(module_prefix) and key.endswith(("alpha", "lora_down.weight", "lora_up.weight"))
+                for key in state_dict
+            )
+            if not has_lora_weights:
+                continue
+
+            dora_key = f"{module_prefix}dora_scale"
+            if dora_key in state_dict:
+                continue
+
+            module_state = module.state_dict(prefix=module_prefix)
+            if dora_key in module_state:
+                state_dict[dora_key] = module_state[dora_key]
+                filled_count += 1
+
+        return filled_count
+
     def load_state_dict(self, state_dict: dict[str, Tensor], strict: bool = True):
         """
         Loads the state dict
@@ -730,12 +779,23 @@ class LoRAModuleWrapper:
         state_dict = {k: v for (k, v) in state_dict.items() if k.startswith(self.prefix)}
 
         self._check_rank_matches(state_dict)
+        self._check_module_type_compatibility(state_dict)
+        dora_fallback_count = self._fill_missing_dora_scale(state_dict)
+        if dora_fallback_count > 0:
+            print(
+                f"Applied LoRA->DoRA load fallback for prefix '{self.prefix}': "
+                f"initialized {dora_fallback_count} missing dora_scale tensor(s)."
+            )
 
         try:
             for module in self.lora_modules.values():
+                module_prefix = module.prefix
+                module_has_state = any(key.startswith(module_prefix) for key in state_dict)
+                if not module_has_state:
+                    continue
                 module.load_state_dict(state_dict, strict=strict)
         except RuntimeError as e:
-            raise RuntimeError(f"Error during loading of module key \"{module.prefix}\"") from e
+            raise RuntimeError(f"Error during loading of module key \"{module.prefix}\": {e}") from e
 
         # Temporarily re-create the state dict, so we can see what keys were left.
         remaining_names = set(state_dict) - set(self.state_dict())
