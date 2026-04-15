@@ -44,18 +44,33 @@ class LinearNf4(
         if self.is_quantized:
             device_weight = self.weight.to(device=device)
             device_absmax = self._absmax.to(device=device)
+            device_code = self._code.to(device=device)
+            device_offset = self._offset.to(device=device)
+
+            # Move state2 tensors to the target device for consistent dequantization
+            state2_absmax = self.quant_state.state2.absmax.to(device=device)
+            state2_code = self.quant_state.state2.code.to(device=device)
 
             return bnb.functional.dequantize_4bit(
                 A=device_weight,
                 quant_state=bnb.functional.QuantState(
                     absmax=device_absmax,
                     shape=self.shape,
-                    code=self._code,
+                    code=device_code,
                     blocksize=self.block_size,
                     quant_type='nf4',
                     dtype=self.compute_dtype,
-                    offset=self._offset,
-                    state2=self.quant_state.state2,
+                    offset=device_offset,
+                    state2=bnb.functional.QuantState(
+                        absmax=state2_absmax,
+                        shape=None,
+                        code=state2_code,
+                        blocksize=self.nested_block_size,
+                        quant_type='nf4',
+                        dtype=torch.float32,
+                        offset=None,
+                        state2=None,
+                    ),
                 ),
                 quant_type='nf4',
             ).detach().to(dtype=dtype)

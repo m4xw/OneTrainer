@@ -48,10 +48,10 @@ class StableDiffusionXLModelSaver(
             dtype: torch.dtype | None,
     ):
         state_dict = convert_sdxl_diffusers_to_ckpt(
-            model.vae.state_dict(),
-            model.unet.state_dict(),
-            model.text_encoder_1.state_dict(),
-            model.text_encoder_2.state_dict(),
+            self._get_dequantized_state_dict(model.vae),
+            self._get_dequantized_state_dict(model.unet),
+            self._get_dequantized_state_dict(model.text_encoder_1),
+            self._get_dequantized_state_dict(model.text_encoder_2),
             model.noise_scheduler
         )
         save_state_dict = self._convert_state_dict_dtype(state_dict, dtype)

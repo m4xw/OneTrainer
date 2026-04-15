@@ -75,11 +75,11 @@ class StableDiffusion3ModelSaver(
             dtype: torch.dtype | None,
     ):
         state_dict = convert_sd3_diffusers_to_ckpt(
-            model.vae.state_dict(),
-            model.transformer.state_dict(),
-            model.text_encoder_1.state_dict() if model.text_encoder_1 is not None else None,
-            model.text_encoder_2.state_dict() if model.text_encoder_2 is not None else None,
-            model.text_encoder_3.state_dict() if model.text_encoder_3 is not None else None,
+            self._get_dequantized_state_dict(model.vae),
+            self._get_dequantized_state_dict(model.transformer),
+            self._get_dequantized_state_dict(model.text_encoder_1) if model.text_encoder_1 is not None else None,
+            self._get_dequantized_state_dict(model.text_encoder_2) if model.text_encoder_2 is not None else None,
+            self._get_dequantized_state_dict(model.text_encoder_3) if model.text_encoder_3 is not None else None,
         )
         save_state_dict = self._convert_state_dict_dtype(state_dict, dtype)
         self._convert_state_dict_to_contiguous(save_state_dict)

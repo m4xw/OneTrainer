@@ -11,6 +11,7 @@ from modules.util.modelSpec.ModelSpec import ModelSpec
 
 import torch
 from torch import Tensor
+from torch import nn
 
 import safetensors.torch as safetensors
 
@@ -18,6 +19,23 @@ import safetensors.torch as safetensors
 class DtypeModelSaverMixin:
     def __init__(self):
         super().__init__()
+
+    def _get_dequantized_state_dict(self, module: nn.Module) -> dict:
+        """Returns a state dict where quantized linear weights are replaced with their dequantized counterparts.
+        This is necessary when saving a quantized model to safetensors/ckpt format for use in external tools."""
+        from modules.module.quantized.mixin.QuantizedLinearMixin import QuantizedLinearMixin
+
+        state_dict = module.state_dict()
+
+        for name, mod in module.named_modules():
+            if isinstance(mod, QuantizedLinearMixin):
+                prefix = (name + '.') if name else ''
+                weight_key = prefix + 'weight'
+                if weight_key in state_dict:
+                    compute_dtype = mod.compute_dtype if mod.compute_dtype is not None else torch.float32
+                    state_dict[weight_key] = mod.unquantized_weight(compute_dtype, device=torch.device('cpu'))
+
+        return state_dict
 
     def _convert_state_dict_dtype(
             self,
