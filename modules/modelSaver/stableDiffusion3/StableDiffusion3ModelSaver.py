@@ -93,7 +93,51 @@ class StableDiffusion3ModelSaver(
             model: StableDiffusion3Model,
             destination: str,
     ):
-        self.__save_diffusers(model, destination, None)
+            from modules.module.quantized.mixin.QuantizedLinearMixin import QuantizedLinearMixin
+            from safetensors.torch import save_file as safetensors_save_file
+            import json as _json
+
+            self.__save_diffusers(model, destination, None)
+
+            components = [
+                ("transformer", model.transformer),
+                ("vae", model.vae),
+            ]
+            if model.text_encoder_1 is not None:
+                components.append(("text_encoder", model.text_encoder_1))
+            if model.text_encoder_2 is not None:
+                components.append(("text_encoder_2", model.text_encoder_2))
+            if model.text_encoder_3 is not None:
+                components.append(("text_encoder_3", model.text_encoder_3))
+
+            for component_name, module in components:
+                if not any(isinstance(m, QuantizedLinearMixin) for m in module.modules()):
+                    continue
+
+                component_dir = os.path.join(destination, component_name)
+                if not os.path.isdir(component_dir):
+                    continue
+
+                state_dict = self._get_dequantized_state_dict(module)
+                state_dict = {k: v.contiguous() for k, v in state_dict.items()}
+
+                index_file = os.path.join(component_dir, "diffusion_pytorch_model.safetensors.index.json")
+                if os.path.isfile(index_file):
+                    with open(index_file) as f:
+                        index = _json.load(f)
+                    shard_files: dict[str, list[str]] = {}
+                    for key, filename in index["weight_map"].items():
+                        shard_files.setdefault(filename, []).append(key)
+                    for filename, keys in shard_files.items():
+                        shard = {k: state_dict[k] for k in keys if k in state_dict}
+                        if shard:
+                            safetensors_save_file(shard, os.path.join(component_dir, filename))
+                else:
+                    for filename in ["diffusion_pytorch_model.safetensors", "model.safetensors"]:
+                        filepath = os.path.join(component_dir, filename)
+                        if os.path.isfile(filepath):
+                            safetensors_save_file(state_dict, filepath)
+                            break
 
     def save(
             self,

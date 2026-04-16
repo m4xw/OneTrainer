@@ -142,14 +142,24 @@ class HFModelLoaderMixin(metaclass=ABCMeta):
             old_value = module._buffers[tensor_name] if is_buffer else module._parameters[tensor_name]
 
             if torch.is_floating_point(old_value):
-                old_type = type(old_value)
                 if not is_quantized_parameter(module, tensor_name):
                     if dtype.is_quantized() or module_name in keep_in_fp32_modules:
-                        value = value.to(dtype=train_dtype.torch_dtype())
+                        target_dtype = train_dtype.torch_dtype()
                     else:
-                        value = value.to(dtype=dtype.torch_dtype())
+                        target_dtype = dtype.torch_dtype()
 
-                new_value = old_type(value)
+                    if target_dtype is None:
+                        target_dtype = old_value.dtype
+
+                    value = value.to(dtype=target_dtype)
+
+                if is_buffer:
+                    new_value = type(old_value)(value)
+                else:
+                    requires_grad = old_value.requires_grad and (
+                        torch.is_floating_point(value) or torch.is_complex(value)
+                    )
+                    new_value = nn.Parameter(value, requires_grad=requires_grad)
 
                 if is_buffer:
                     module._buffers[tensor_name].data = new_value

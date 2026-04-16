@@ -227,7 +227,7 @@ def replace_linear_with_quantized_layers(
     for name, module in parent_module.named_modules():
         assert (not isinstance(module, convert_type)
                 or isinstance(module, (QuantizedLinearMixin, LinearGGUFA8))
-                or any(s in name.split('.') for s in keep_in_fp32_modules)
+                or (keep_in_fp32_modules is not None and any(s in name.split('.') for s in keep_in_fp32_modules))
                 or (quant_filters is not None and len(quant_filters) > 0 and not any(f.matches(name) for f in quant_filters))
                ), f"Linear layer {name} was not found in model for quantization"
 
