@@ -6,6 +6,7 @@ class DistillationTargetMode(Enum):
     SCALED_LOSS_WEIGHT = 'SCALED_LOSS_WEIGHT'
     CFG_DISTILL = 'CFG_DISTILL'
     STEP_ROLLOUT = 'STEP_ROLLOUT'
+    CFG_REGULARISE = 'CFG_REGULARISE'
 
     def __str__(self):
         return self.value

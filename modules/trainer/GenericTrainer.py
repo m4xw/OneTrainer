@@ -172,6 +172,7 @@ class GenericTrainer(BaseTrainer):
                 DistillationTargetMode.SCALED_LOSS_WEIGHT,
                 DistillationTargetMode.CFG_DISTILL,
                 DistillationTargetMode.STEP_ROLLOUT,
+                DistillationTargetMode.CFG_REGULARISE,
             }
             if self.config.distillation.target_mode not in valid_modes:
                 raise ValueError(
@@ -207,6 +208,13 @@ class GenericTrainer(BaseTrainer):
                         print(f"CFG scale: {self.config.distillation.cfg_scale}")
                         print(f"Rollout steps: {self.config.distillation.rollout_steps}")
                         print(f"Rollout blend: {self.config.distillation.rollout_blend}")
+                        if self.config.distillation.target_mode == DistillationTargetMode.CFG_REGULARISE:
+                            print(f"CFG Regularisation: ENABLED")
+                            print(f"  Skip percentile: {self.config.distillation.cfg_regularise_skip_percentile}")
+                            print(f"  Dampening strength: {self.config.distillation.cfg_regularise_dampening_strength}")
+                            print(f"  Metric: CFG delta ||p_cond - p_empty|| (zero overhead)")
+                            print(f"  After epoch 1, cache will be post-processed: high-guidance-need")
+                            print(f"  samples skipped, over-guided samples dampened toward mean activation.")
                         print(f"All samples with concept_type 'DISTILLATION' will have their parent")
                         print(f"model predictions cached to disk during this training run.")
                         print(f"This cache will be reused in subsequent training runs with USE_CACHE mode.")
@@ -276,6 +284,23 @@ class GenericTrainer(BaseTrainer):
                     f"  1. Using cache mode without CFG_DISTILL enabled when cache was generated\n"
                     f"  2. Model setup does not support CFG_DISTILL (only SDXL currently supported)\n"
                     f"\nSolution: Regenerate cache with CFG_DISTILL target_mode, or use a different target_mode."
+                )
+            
+            cfg_scale = float(self.config.distillation.cfg_scale)
+            predicted_empty_typed = predicted_empty.to(dtype=base_parent_prediction.dtype)
+            base_parent_typed = base_parent_prediction.to(dtype=base_parent_prediction.dtype)
+            
+            # p_cfg = empty + cfg_scale * (positive - empty)
+            p_cfg = predicted_empty_typed + cfg_scale * (base_parent_typed - predicted_empty_typed)
+            return p_cfg
+
+        if target_mode == DistillationTargetMode.CFG_REGULARISE:
+            # Same CFG formula as CFG_DISTILL; regularisation is applied during cache post-processing
+            predicted_empty = parent_model_output_data.get('predicted_empty')
+            if predicted_empty is None:
+                raise ValueError(
+                    f"CFG_REGULARISE target_mode requires predicted_empty from parent model, but it is None.\n"
+                    f"Ensure the model setup supports unconditional prediction (predicted_empty)."
                 )
             
             cfg_scale = float(self.config.distillation.cfg_scale)
@@ -914,6 +939,11 @@ class GenericTrainer(BaseTrainer):
                         self.model.to('cpu')
                         torch_gc()
                     
+                    is_cfg_regularise = (self.config.distillation.target_mode == DistillationTargetMode.CFG_REGULARISE)
+                    needs_empty_pred = self.config.distillation.target_mode in (
+                        DistillationTargetMode.CFG_DISTILL, DistillationTargetMode.CFG_REGULARISE
+                    )
+
                     # === CACHE GENERATION MODE ===
                     if (self.config.distillation.enabled and 
                         self.config.distillation.cache_mode == DistillationCacheMode.GENERATE_CACHE):
@@ -940,7 +970,7 @@ class GenericTrainer(BaseTrainer):
                                 batch, 
                                 self.config, 
                                 train_progress,
-                                generate_distillation_empty=self.config.distillation.target_mode == DistillationTargetMode.CFG_DISTILL,
+                                generate_distillation_empty=needs_empty_pred,
                             )
 
                             transformed_parent_prediction = self.__build_distillation_target(
@@ -976,6 +1006,24 @@ class GenericTrainer(BaseTrainer):
                                         if parent_model_output_data.get('predicted_empty') is not None else None,
                                     'prediction_type': parent_model_output_data.get('prediction_type'),
                                 }
+                                
+                                # For CFG_REGULARISE: compute guidance delta norm
+                                if is_cfg_regularise:
+                                    # Guidance delta: ||p_cond - p_empty|| measures how much
+                                    # guidance the parent applies. This is the ONLY metric needed:
+                                    #   - Skip decision: high delta → needs guidance → skip
+                                    #   - Dampening scale: normalize delta to mean across samples
+                                    #   - Application: scale guidance component by that factor
+                                    # All three steps operate on the same quantity → consistent.
+                                    predicted_empty = parent_model_output_data.get('predicted_empty')
+                                    predicted_cond = parent_model_output_data['predicted']
+                                    if predicted_empty is not None:
+                                        cfg_delta = (predicted_cond[idx:idx+1] - predicted_empty[idx:idx+1]).to(dtype=torch.float32)
+                                        mean_dim = list(range(1, cfg_delta.ndim))
+                                        cfg_delta_norm = cfg_delta.norm(2, dim=mean_dim).mean().item()
+                                        prediction_dict['cfg_regularise_initial_loss'] = cfg_delta_norm
+                                    
+                                    prediction_dict['cfg_regularise_image_path'] = image_path
                                 
                                 self.distillation_cache_manager.save_prediction(
                                     image_path=image_path,
@@ -1015,6 +1063,9 @@ class GenericTrainer(BaseTrainer):
                             # Create tensor to store cached predictions
                             prior_model_prediction = torch.zeros_like(model_output_data['predicted'])
                             
+                            # Track which distillation indices survive CFG regularisation skip
+                            active_distillation_indices = []
+                            
                             for idx in distillation_indices:
                                 image_path = batch['image_path'][idx]
                                 timestep_value = model_output_data.get('timestep')
@@ -1042,20 +1093,28 @@ class GenericTrainer(BaseTrainer):
                                         f"  Please regenerate cache with GENERATE_CACHE mode."
                                     )
                                 
+                                # CFG_REGULARISE: skip samples marked for exclusion
+                                if cached_data.get('cfg_regularise_skip', False):
+                                    continue
+                                
                                 # Move cached prediction to correct device and dtype
                                 cached_pred = cached_data['predicted'].to(
                                     device=model_output_data['predicted'].device,
                                     dtype=model_output_data['target'].dtype
                                 )
                                 prior_model_prediction[idx:idx+1] = cached_pred
+                                active_distillation_indices.append(idx)
                             
-                            # Store for distillation loss calculation
-                            model_output_data['prior_target'] = prior_model_prediction
-                            model_output_data['distillation_indices'] = distillation_indices
+                            # Store for distillation loss calculation (only non-skipped samples)
+                            if len(active_distillation_indices) > 0:
+                                model_output_data['prior_target'] = prior_model_prediction
+                                model_output_data['distillation_indices'] = active_distillation_indices
                             
                             if multi.is_master() and train_progress.global_step % 10 == 0:
                                 cache_stats = self.distillation_cache_manager.get_cache_stats()
-                                print(f"Cache stats - Hits: {cache_stats['cache_hits']}, Misses: {cache_stats['cache_misses']}")
+                                skipped = len(distillation_indices) - len(active_distillation_indices)
+                                print(f"Cache stats - Hits: {cache_stats['cache_hits']}, Misses: {cache_stats['cache_misses']}"
+                                      + (f", Regularisation skipped: {skipped}" if skipped > 0 else ""))
                     else:
                         # === NORMAL MODE (DISABLED or live inference) ===
                         # Ensure student model is on training device (may have been moved to CPU during cache generation)
@@ -1077,7 +1136,7 @@ class GenericTrainer(BaseTrainer):
                                     batch, 
                                     self.config, 
                                     train_progress,
-                                    generate_distillation_empty=self.config.distillation.target_mode == DistillationTargetMode.CFG_DISTILL,
+                                    generate_distillation_empty=needs_empty_pred,
                                 )
                             
                             # Run student model
@@ -1193,6 +1252,19 @@ class GenericTrainer(BaseTrainer):
 
             train_progress.next_epoch()
             self.callbacks.on_update_train_progress(train_progress, current_epoch_length, self.config.epochs)
+
+            # Post-epoch: apply CFG regularisation to cache after first epoch
+            if (self.config.distillation.enabled
+                    and self.config.distillation.cache_mode == DistillationCacheMode.GENERATE_CACHE
+                    and self.config.distillation.target_mode == DistillationTargetMode.CFG_REGULARISE
+                    and self.distillation_cache_manager is not None
+                    and train_progress.epoch == 1  # after first epoch (0-indexed, just incremented)
+                    and multi.is_master()):
+                self.callbacks.on_update_status("Applying CFG regularisation to cache...")
+                self.distillation_cache_manager.apply_cfg_regularisation(
+                    skip_percentile=self.config.distillation.cfg_regularise_skip_percentile,
+                    dampening_strength=self.config.distillation.cfg_regularise_dampening_strength,
+                )
 
             if self.commands.get_stop_command():
                 return

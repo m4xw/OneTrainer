@@ -807,7 +807,11 @@ class TrainingTab:
                      "  • RAW: Use parent prediction directly (legacy behavior)\n" +
                      "  • SCALED_LOSS_WEIGHT: Apply only distillation.loss_weight scaling (no target transformation)\n" +
                      "  • CFG_DISTILL: CFG distillation: p_cfg = empty + cfg_scale * (positive - empty)\n" +
-                     "  • STEP_ROLLOUT: Blend multiple parent predictions to create a rollout target")
+                     "  • STEP_ROLLOUT: Blend multiple parent predictions to create a rollout target\n" +
+                     "  • CFG_REGULARISE: Like CFG_DISTILL but with activation-gated regularisation.\n" +
+                     "    Records initial loss per image during GENERATE_CACHE, then post-processes:\n" +
+                     "    high-loss samples are skipped, low-loss samples have activations dampened\n" +
+                     "    toward the mean to equalise CFG sensitivity across concepts.")
         components.options(frame, 9, 1, [str(x) for x in list(DistillationTargetMode)], self.ui_state, "distillation.target_mode")
 
         # CFG Scale
@@ -838,6 +842,15 @@ class TrainingTab:
         components.label(frame, 14, 0, "Cache Directory",
                          tooltip="Directory to store/load distillation cache files. Path is relative to workspace directory. Cache files contain parent model predictions for each training sample.")
         components.entry(frame, 14, 1, self.ui_state, "distillation.cache_dir")
+
+        # CFG Regularisation Settings
+        components.label(frame, 15, 0, "CFG Reg. Skip Percentile",
+                         tooltip="CFG_REGULARISE only. Samples with initial loss above this percentile are skipped during training. Range: 0-100. E.g. 75 means top 25% highest loss samples are skipped.")
+        components.entry(frame, 15, 1, self.ui_state, "distillation.cfg_regularise_skip_percentile")
+
+        components.label(frame, 16, 0, "CFG Reg. Dampening",
+                         tooltip="CFG_REGULARISE only. Strength of activation dampening for low-loss samples. Range: 0-1. 0 = no dampening, 1 = full normalisation to mean activation. Dampening is proportional to how low the loss is.")
+        components.entry(frame, 16, 1, self.ui_state, "distillation.cfg_regularise_dampening_strength")
 
     def __create_loss_frame(self, master, row, supports_vb_loss: bool = False):
         frame = ctk.CTkFrame(master=master, corner_radius=5)

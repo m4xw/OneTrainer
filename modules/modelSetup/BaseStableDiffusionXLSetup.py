@@ -372,9 +372,9 @@ class BaseStableDiffusionXLSetup(
 
         model_output_data['prediction_type'] = model.noise_scheduler.config.prediction_type
         
-        # For CFG_DISTILL: Generate empty prompt prediction
+        # For CFG_DISTILL / CFG_REGULARISE: Generate empty prompt prediction
         if generate_distillation_empty and config.distillation.enabled \
-            and config.distillation.target_mode.value == 'CFG_DISTILL':
+            and config.distillation.target_mode.value in ('CFG_DISTILL', 'CFG_REGULARISE'):
             with torch.no_grad():
                 # Create empty text embeddings (as unconditional guidance)
                 empty_text_encoder_output, empty_pooled_text_encoder_2_output = model.combine_text_encoder_output(

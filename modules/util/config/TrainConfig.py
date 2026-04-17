@@ -373,6 +373,10 @@ class DistillationConfig(BaseConfig):
     cache_mode: DistillationCacheMode
     cache_dir: str
 
+    # CFG Regularisation (CFG_REGULARISE target_mode)
+    cfg_regularise_skip_percentile: float
+    cfg_regularise_dampening_strength: float
+
     @staticmethod
     def default_values():
         data = []
@@ -393,6 +397,8 @@ class DistillationConfig(BaseConfig):
         data.append(("rollout_blend", 0.5, float, False))
         data.append(("cache_mode", DistillationCacheMode.DISABLED, DistillationCacheMode, False))
         data.append(("cache_dir", "workspace-cache/distillation", str, False))
+        data.append(("cfg_regularise_skip_percentile", 75.0, float, False))
+        data.append(("cfg_regularise_dampening_strength", 0.5, float, False))
         return DistillationConfig(data)
 
 class TrainConfig(BaseConfig):
